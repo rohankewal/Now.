@@ -37,6 +37,12 @@ class JournalEntry {
     }
 }
 
+// MARK: - API MODELS
+struct APIQuote: Codable {
+    let content: String
+    let author: String
+}
+
 // MARK: - VIEW MODELS & CONSTANTS
 struct AppContent {
     static let prompts = [
@@ -44,18 +50,41 @@ struct AppContent {
         "What is weighing on your mind right now?",
         "Write one thing you are grateful for.",
         "How did you practice discipline today?",
-        "What would make today great?"
+        "What would make today great?",
+        "Who can you forgive today?",
+        "What is a small win you had recently?",
+        "How did you step out of your comfort zone today?",
+        "What is draining your energy right now?",
+        "What is bringing you energy right now?"
     ]
     
-    static let quotes = [
+    // Fallback quotes if offline
+    static let backupQuotes = [
         "We suffer more often in imagination than in reality. — Seneca",
         "The obstacle is the way. — Marcus Aurelius",
         "He who has a why to live for can bear almost any how. — Nietzsche",
-        "Waste no more time arguing what a good man should be. Be one. — Marcus Aurelius"
+        "Waste no more time arguing what a good man should be. Be one. — Marcus Aurelius",
+        "The present moment is filled with joy and happiness. — Thich Nhat Hanh"
     ]
     
-    static func randomQuote() -> String { quotes.randomElement()! }
     static func randomPrompt() -> String { prompts.randomElement()! }
+    
+    // NEW: Async Fetch Function
+    static func fetchQuote() async -> String {
+        // We use a specific tag 'wisdom' to keep it relevant to the app's theme
+        guard let url = URL(string: "https://api.quotable.io/random?tags=wisdom") else {
+            return backupQuotes.randomElement()!
+        }
+        
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            let quoteData = try JSONDecoder().decode(APIQuote.self, from: data)
+            return "\"\(quoteData.content)\" — \(quoteData.author)"
+        } catch {
+            // If fetch fails (offline/error), return a backup
+            return backupQuotes.randomElement()!
+        }
+    }
 }
 
 // MARK: - VISUAL EFFECTS (LIQUID GLASS)
@@ -123,6 +152,9 @@ struct ContentView: View {
     @Query(sort: \JournalEntry.timestamp, order: .reverse) private var entries: [JournalEntry]
     @State private var showNewEntrySheet = false
     
+    // State for the dynamic quote
+    @State private var dailyQuote: String = "Finding wisdom..."
+    
     var body: some View {
         NavigationStack {
             ZStack {
@@ -133,8 +165,8 @@ struct ContentView: View {
                         HeaderView()
                         
                         // Quote now navigates to "Breathing Space"
-                        NavigationLink(destination: BreathingSpaceView()) {
-                            QuoteCard()
+                        NavigationLink(destination: BreathingSpaceView(quote: dailyQuote)) {
+                            QuoteCard(quote: dailyQuote)
                         }
                         .buttonStyle(PlainButtonStyle()) // Prevents default link coloring
                         
@@ -188,6 +220,10 @@ struct ContentView: View {
             .sheet(isPresented: $showNewEntrySheet) {
                 NewEntryView()
                     .presentationBackground(.ultraThinMaterial)
+            }
+            // Load the quote when the app appears
+            .task {
+                dailyQuote = await AppContent.fetchQuote()
             }
         }
     }
@@ -279,7 +315,7 @@ struct EntryDetailView: View {
 /// A view focused on the quote with a breathing animation
 struct BreathingSpaceView: View {
     @State private var breathe = false
-    let quote = AppContent.randomQuote() // Or pass the specific one if desired
+    let quote: String // Passed from parent
     
     var body: some View {
         ZStack {
@@ -323,7 +359,7 @@ struct BreathingSpaceView: View {
     }
 }
 
-// MARK: - EXISTING SUBVIEWS (Unchanged or Minor Tweaks)
+// MARK: - EXISTING SUBVIEWS
 
 struct HeaderView: View {
     var body: some View {
@@ -358,7 +394,7 @@ struct HeaderView: View {
 }
 
 struct QuoteCard: View {
-    let quote = AppContent.randomQuote()
+    let quote: String
     
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
