@@ -174,7 +174,9 @@ struct LiquidBackground: View {
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \JournalEntry.timestamp, order: .reverse) private var entries: [JournalEntry]
+    
     @State private var showNewEntrySheet = false
+    @State private var showProfileSheet = false // New state for profile
     
     // State for the dynamic quote
     @State private var dailyQuote: String = "Finding wisdom..."
@@ -186,7 +188,10 @@ struct ContentView: View {
                 
                 ScrollView {
                     VStack(spacing: 24) {
-                        HeaderView()
+                        // Header with Profile Action
+                        HeaderView(onProfileTap: {
+                            showProfileSheet = true
+                        })
                         
                         // Quote now navigates to "Breathing Space"
                         NavigationLink(destination: BreathingSpaceView(quote: dailyQuote)) {
@@ -245,6 +250,10 @@ struct ContentView: View {
                 NewEntryView()
                     .presentationBackground(.ultraThinMaterial)
             }
+            .sheet(isPresented: $showProfileSheet) {
+                ProfileView()
+                    .presentationBackground(.ultraThinMaterial)
+            }
             // Load the quote (cached or new) when the app appears
             .task {
                 dailyQuote = await AppContent.getDailyQuote()
@@ -259,7 +268,167 @@ struct ContentView: View {
     }
 }
 
-// MARK: - NEW VIEWS (DETAILS & FEATURES)
+// MARK: - NEW VIEWS (PROFILE, DETAILS & FEATURES)
+
+/// The Profile View showing stats and settings
+struct ProfileView: View {
+    @Query private var entries: [JournalEntry]
+    @Environment(\.dismiss) private var dismiss
+
+    // Computed stats
+    var totalEntries: Int { entries.count }
+    var currentStreak: Int {
+        return entries.isEmpty ? 0 : 1 // Simplified streak for V1
+    }
+    
+    var averageMood: String {
+        if entries.isEmpty { return "N/A" }
+        let total = entries.reduce(0) { $0 + $1.moodScore }
+        let average = total / Double(entries.count)
+        
+        switch average {
+        case 0..<0.2: return "Heavy"
+        case 0.2..<0.4: return "Anxious"
+        case 0.4..<0.6: return "Neutral"
+        case 0.6..<0.8: return "Calm"
+        case 0.8...1.0: return "Radiant"
+        default: return "Present"
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            LiquidBackground()
+
+            ScrollView {
+                VStack(spacing: 24) {
+                    // Custom Header for Sheet
+                    HStack {
+                        Text("Profile")
+                            .font(.system(size: 40, weight: .bold, design: .serif))
+                            .foregroundColor(.white)
+                        Spacer()
+                        Button {
+                            dismiss()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.title2)
+                                .foregroundColor(.white.opacity(0.5))
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.top, 24)
+
+                    // Avatar / Identity
+                    VStack(spacing: 12) {
+                        Circle()
+                            .fill(.ultraThinMaterial)
+                            .frame(width: 100, height: 100)
+                            .overlay(
+                                Text("ME")
+                                    .font(.system(size: 30, weight: .bold, design: .serif))
+                                    .foregroundColor(.white)
+                            )
+                            .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 1))
+                            .shadow(radius: 10)
+
+                        Text("Mindful Traveler")
+                            .font(.title3)
+                            .fontWeight(.medium)
+                            .foregroundColor(.white)
+                        
+                        Text("Member since today")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.5))
+                    }
+                    .padding(.vertical)
+
+                    // Stats Grid
+                    HStack(spacing: 12) {
+                        StatCard(title: "Entries", value: "\(totalEntries)")
+                        StatCard(title: "Day Streak", value: "\(currentStreak)")
+                        StatCard(title: "Avg Mood", value: averageMood)
+                    }
+                    .padding(.horizontal)
+
+                    // Settings Section
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("PREFERENCES")
+                            .font(.caption)
+                            .fontWeight(.bold)
+                            .foregroundColor(.white.opacity(0.6))
+                            .padding(.leading, 8)
+                            .padding(.top, 10)
+
+                        SettingsRow(icon: "bell.fill", title: "Daily Reminders", isOn: true)
+                        SettingsRow(icon: "faceid", title: "Face ID Lock", isOn: false)
+                        SettingsRow(icon: "icloud.fill", title: "iCloud Sync", isOn: true)
+                        
+                        // Data Export Button
+                        Button(action: {}) {
+                            HStack {
+                                Image(systemName: "square.and.arrow.up")
+                                    .foregroundColor(.white.opacity(0.8))
+                                    .frame(width: 24)
+                                Text("Export Data")
+                                    .foregroundColor(.white)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .foregroundColor(.white.opacity(0.3))
+                            }
+                            .padding()
+                            .liquidGlass()
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+                .padding(.bottom, 50)
+            }
+        }
+    }
+}
+
+struct StatCard: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Text(value)
+                .font(.title3)
+                .fontWeight(.bold)
+                .foregroundColor(.white)
+            Text(title.uppercased())
+                .font(.system(size: 10))
+                .fontWeight(.bold)
+                .foregroundColor(.white.opacity(0.6))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 16)
+        .liquidGlass()
+    }
+}
+
+struct SettingsRow: View {
+    let icon: String
+    let title: String
+    @State var isOn: Bool
+
+    var body: some View {
+        HStack {
+            Image(systemName: icon)
+                .foregroundColor(.white.opacity(0.8))
+                .frame(width: 24)
+            Text(title)
+                .foregroundColor(.white)
+            Spacer()
+            Toggle("", isOn: $isOn)
+                .tint(.white.opacity(0.3))
+        }
+        .padding()
+        .liquidGlass()
+    }
+}
 
 /// A detail view to read the full entry and reflect
 struct EntryDetailView: View {
@@ -386,6 +555,8 @@ struct BreathingSpaceView: View {
 // MARK: - EXISTING SUBVIEWS
 
 struct HeaderView: View {
+    var onProfileTap: () -> Void
+    
     var body: some View {
         HStack {
             VStack(alignment: .leading) {
@@ -401,16 +572,18 @@ struct HeaderView: View {
             }
             Spacer()
             
-            Circle()
-                .fill(.ultraThinMaterial)
-                .frame(width: 44, height: 44)
-                .overlay(
-                    Text("ME")
-                        .font(.caption2)
-                        .bold()
-                        .foregroundColor(.white)
-                )
-                .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 1))
+            Button(action: onProfileTap) {
+                Circle()
+                    .fill(.ultraThinMaterial)
+                    .frame(width: 44, height: 44)
+                    .overlay(
+                        Text("ME")
+                            .font(.caption2)
+                            .bold()
+                            .foregroundColor(.white)
+                    )
+                    .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 1))
+            }
         }
         .padding(.horizontal)
         .padding(.top, 20)
