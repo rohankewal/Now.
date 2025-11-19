@@ -17,17 +17,14 @@ class AuthenticationManager {
         let context = LAContext()
         var error: NSError?
         
-        // Check if biometric authentication is available
         if context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) {
             let reason = "Unlock your journal."
-            
             context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { success, authenticationError in
                 DispatchQueue.main.async {
                     completion(success)
                 }
             }
         } else {
-            // No biometrics available (or simulator)
             print("Biometrics not available")
             completion(false)
         }
@@ -43,7 +40,7 @@ class NotificationManager {
         }
     }
     
-    static func scheduleDailyReminder(isEnabled: Bool) {
+    static func scheduleDailyReminder(isEnabled: Bool, timePreference: String = "Night") {
         let center = UNUserNotificationCenter.current()
         center.removeAllPendingNotificationRequests()
         
@@ -53,10 +50,17 @@ class NotificationManager {
             content.body = "Take a moment to capture the Now."
             content.sound = .default
             
-            // Schedule for 8:00 PM every day
             var dateComponents = DateComponents()
-            dateComponents.hour = 20 // 8 PM
             dateComponents.minute = 0
+            
+            switch timePreference {
+            case "Morning":
+                dateComponents.hour = 8 // 8:00 AM
+            case "Afternoon":
+                dateComponents.hour = 14 // 2:00 PM
+            default:
+                dateComponents.hour = 20 // 8:00 PM
+            }
             
             let trigger = UNCalendarNotificationTrigger(dateMatching: dateComponents, repeats: true)
             let request = UNNotificationRequest(identifier: "daily-reflection", content: content, trigger: trigger)
@@ -233,14 +237,24 @@ struct ContentView: View {
 struct OnboardingView: View {
     @AppStorage("hasCompletedOnboarding") var hasCompletedOnboarding: Bool = false
     @AppStorage("userName") var userName: String = ""
+    @AppStorage("userAgeRange") var userAgeRange: String = ""
+    @AppStorage("journalingPreference") var journalingPreference: String = "Night"
+    
     @State private var currentTab = 0
+    
+    let ageRanges = ["Under 18", "18-24", "25-34", "35-44", "45-54", "55+"]
+    let timePreferences = [
+        ("Morning", "sun.max.fill", "Start your day with clarity."),
+        ("Afternoon", "sun.min.fill", "A midday reset."),
+        ("Night", "moon.stars.fill", "Reflect before rest.")
+    ]
     
     var body: some View {
         ZStack {
             LiquidBackground()
             
             TabView(selection: $currentTab) {
-                // Step 1: Welcome
+                // Step 0: Welcome
                 VStack(spacing: 20) {
                     Text("Now.")
                         .font(.system(size: 60, weight: .bold, design: .serif))
@@ -251,7 +265,7 @@ struct OnboardingView: View {
                 }
                 .tag(0)
                 
-                // Step 2: Name
+                // Step 1: Name
                 VStack(spacing: 30) {
                     Text("What should we call you?")
                         .font(.title)
@@ -268,7 +282,97 @@ struct OnboardingView: View {
                 }
                 .tag(1)
                 
-                // Step 3: Notifications
+                // Step 2: Age Range
+                VStack(spacing: 20) {
+                    Text("Which age group represents you?")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                    
+                    ScrollView {
+                        VStack(spacing: 12) {
+                            ForEach(ageRanges, id: \.self) { range in
+                                Button(action: {
+                                    userAgeRange = range
+                                    withAnimation { currentTab = 3 }
+                                }) {
+                                    Text(range)
+                                        .fontWeight(.medium)
+                                        .frame(maxWidth: .infinity)
+                                        .padding()
+                                        // FIXED: Wrapped in AnyShapeStyle to satisfy type requirements
+                                        .background(
+                                            userAgeRange == range
+                                            ? AnyShapeStyle(Color.white)
+                                            : AnyShapeStyle(.ultraThinMaterial)
+                                        )
+                                        .foregroundColor(userAgeRange == range ? .black : .white)
+                                        .cornerRadius(12)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 12)
+                                                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                                        )
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 40)
+                    }
+                }
+                .tag(2)
+                
+                // Step 3: Time Preference
+                VStack(spacing: 20) {
+                    Text("When do you prefer to reflect?")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                        .multilineTextAlignment(.center)
+                    
+                    VStack(spacing: 16) {
+                        ForEach(timePreferences, id: \.0) { pref, icon, desc in
+                            Button(action: {
+                                journalingPreference = pref
+                                withAnimation { currentTab = 4 }
+                            }) {
+                                HStack(spacing: 16) {
+                                    Image(systemName: icon)
+                                        .font(.title2)
+                                        .frame(width: 30)
+                                    
+                                    VStack(alignment: .leading) {
+                                        Text(pref)
+                                            .fontWeight(.bold)
+                                        Text(desc)
+                                            .font(.caption)
+                                            .opacity(0.8)
+                                    }
+                                    Spacer()
+                                    
+                                    if journalingPreference == pref {
+                                        Image(systemName: "checkmark.circle.fill")
+                                    }
+                                }
+                                .padding()
+                                // FIXED: Wrapped in AnyShapeStyle
+                                .background(
+                                    journalingPreference == pref
+                                    ? AnyShapeStyle(Color.white)
+                                    : AnyShapeStyle(.ultraThinMaterial)
+                                )
+                                .foregroundColor(journalingPreference == pref ? .black : .white)
+                                .cornerRadius(16)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 16)
+                                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                                )
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 30)
+                }
+                .tag(3)
+                
+                // Step 4: Notifications
                 VStack(spacing: 30) {
                     Image(systemName: "bell.badge")
                         .font(.system(size: 60))
@@ -278,7 +382,7 @@ struct OnboardingView: View {
                         .font(.title2)
                         .fontWeight(.semibold)
                     
-                    Text("Allow us to gently nudge you to\nreturn to the present moment.")
+                    Text("We'll nudge you in the **\(journalingPreference.lowercased())** to return to the present moment.")
                         .multilineTextAlignment(.center)
                         .opacity(0.7)
                         .padding(.horizontal)
@@ -286,19 +390,26 @@ struct OnboardingView: View {
                     Button("Enable Reminders") {
                         NotificationManager.requestPermission { granted in
                             if granted {
-                                NotificationManager.scheduleDailyReminder(isEnabled: true)
+                                NotificationManager.scheduleDailyReminder(isEnabled: true, timePreference: journalingPreference)
                                 UserDefaults.standard.set(true, forKey: "areNotificationsEnabled")
                             }
+                            withAnimation { currentTab = 5 }
                         }
                     }
                     .padding()
                     .background(Color.white)
                     .foregroundColor(.black)
                     .cornerRadius(25)
+                    
+                    Button("Maybe Later") {
+                        withAnimation { currentTab = 5 }
+                    }
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.6))
                 }
-                .tag(2)
+                .tag(4)
                 
-                // Step 4: Finish
+                // Step 5: Finish
                 VStack(spacing: 30) {
                     Text("You are ready.")
                         .font(.title)
@@ -319,7 +430,7 @@ struct OnboardingView: View {
                             .cornerRadius(30)
                     }
                 }
-                .tag(3)
+                .tag(5)
             }
             .tabViewStyle(.page(indexDisplayMode: .always))
             .foregroundColor(.white)
@@ -473,12 +584,14 @@ struct JournalHomeView: View {
     }
 }
 
-// MARK: - PROFILE VIEW (FUNCTIONAL)
+// MARK: - PROFILE VIEW
 struct ProfileView: View {
     @Query private var entries: [JournalEntry]
     @Environment(\.dismiss) private var dismiss
     
     @AppStorage("userName") var userName: String = "Traveler"
+    @AppStorage("userAgeRange") var userAgeRange: String = "N/A"
+    @AppStorage("journalingPreference") var journalingPreference: String = "Night"
     @AppStorage("areNotificationsEnabled") var areNotificationsEnabled: Bool = false
     @AppStorage("isFaceIDEnabled") var isFaceIDEnabled: Bool = false
 
@@ -536,7 +649,7 @@ struct ProfileView: View {
                             .fontWeight(.medium)
                             .foregroundColor(.white)
                         
-                        Text("Mindful Member")
+                        Text("Mindful Member • \(userAgeRange)")
                             .font(.caption)
                             .foregroundColor(.white.opacity(0.5))
                     }
@@ -561,7 +674,10 @@ struct ProfileView: View {
                         Toggle(isOn: $areNotificationsEnabled) {
                             HStack {
                                 Image(systemName: "bell.fill").frame(width: 24)
-                                Text("Daily Reminders (8 PM)")
+                                VStack(alignment: .leading) {
+                                    Text("Daily Reminders")
+                                    Text(journalingPreference).font(.caption).opacity(0.7)
+                                }
                             }
                         }
                         .padding()
@@ -571,7 +687,7 @@ struct ProfileView: View {
                             if newValue {
                                 NotificationManager.requestPermission { granted in
                                     if granted {
-                                        NotificationManager.scheduleDailyReminder(isEnabled: true)
+                                        NotificationManager.scheduleDailyReminder(isEnabled: true, timePreference: journalingPreference)
                                     } else {
                                         areNotificationsEnabled = false // Revert if denied
                                     }
@@ -683,8 +799,6 @@ struct HeaderView: View {
         .padding(.top, 20)
     }
 }
-
-// --- (All other subviews like QuoteCard, EntryRow, EntryDetailView, BreathingSpaceView remain unchanged below) ---
 
 struct QuoteCard: View {
     let quote: String
@@ -948,6 +1062,8 @@ struct JournalingStep: View {
     }
 }
 
+// MARK: - MISSING VIEWS RESTORED
+
 struct EntryDetailView: View {
     let entry: JournalEntry
     @Environment(\.modelContext) private var modelContext
@@ -1026,6 +1142,7 @@ struct BreathingSpaceView: View {
         ZStack {
             LiquidBackground()
             
+            // Breathing Circle
             Circle()
                 .fill(Color.white.opacity(0.05))
                 .frame(width: breathe ? 300 : 150, height: breathe ? 300 : 150)
