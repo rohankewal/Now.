@@ -7,13 +7,71 @@
 
 import SwiftUI
 import SwiftData
+import LocalAuthentication
+import UserNotifications
+
+// MARK: - MANAGERS (Logic Layer)
+
+class AuthenticationManager {
+    static func authenticate(completion: @escaping (Bool) -> Void) {
+        let context = LAContext()
+        var error: NSError?
+        
+        // Check if biometric authentication is available
+        if context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) {
+            let reason = "Unlock your journal."
+            
+            context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { success, authenticationError in
+                DispatchQueue.main.async {
+                    completion(success)
+                }
+            }
+        } else {
+            // No biometrics available (or simulator)
+            print("Biometrics not available")
+            completion(false)
+        }
+    }
+}
+
+class NotificationManager {
+    static func requestPermission(completion: @escaping (Bool) -> Void) {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
+            DispatchQueue.main.async {
+                completion(granted)
+            }
+        }
+    }
+    
+    static func scheduleDailyReminder(isEnabled: Bool) {
+        let center = UNUserNotificationCenter.current()
+        center.removeAllPendingNotificationRequests()
+        
+        if isEnabled {
+            let content = UNMutableNotificationContent()
+            content.title = "Time to Reflect"
+            content.body = "Take a moment to capture the Now."
+            content.sound = .default
+            
+            // Schedule for 8:00 PM every day
+            var dateComponents = DateComponents()
+            dateComponents.hour = 20 // 8 PM
+            dateComponents.minute = 0
+            
+            let trigger = UNCalendarNotificationTrigger(dateMatching: dateComponents, repeats: true)
+            let request = UNNotificationRequest(identifier: "daily-reflection", content: content, trigger: trigger)
+            
+            center.add(request)
+        }
+    }
+}
 
 // MARK: - DATA MODELS
 @Model
 class JournalEntry {
     var id: UUID
     var timestamp: Date
-    var moodScore: Double // 0.0 to 1.0
+    var moodScore: Double
     var prompt: String
     var content: String
     
@@ -37,7 +95,6 @@ class JournalEntry {
     }
 }
 
-// MARK: - API MODELS
 struct APIQuote: Codable {
     let content: String
     let author: String
@@ -49,63 +106,47 @@ struct AppContent {
         "What is the most important thing to do today?",
         "What is weighing on your mind right now?",
         "Write one thing you are grateful for.",
-        "How did you practice discipline today?",
         "What would make today great?",
         "Who can you forgive today?",
         "What is a small win you had recently?",
-        "How did you step out of your comfort zone today?",
         "What is draining your energy right now?",
         "What is bringing you energy right now?"
     ]
     
-    // Fallback quotes if offline
     static let backupQuotes = [
         "We suffer more often in imagination than in reality. — Seneca",
         "The obstacle is the way. — Marcus Aurelius",
         "He who has a why to live for can bear almost any how. — Nietzsche",
-        "Waste no more time arguing what a good man should be. Be one. — Marcus Aurelius",
         "The present moment is filled with joy and happiness. — Thich Nhat Hanh"
     ]
     
-    // Keys for saving the daily quote to UserDefaults
     private static let quoteKey = "storedDailyQuote"
     private static let dateKey = "storedDailyQuoteDate"
     
     static func randomPrompt() -> String { prompts.randomElement()! }
     
-    // NEW: Smart Daily Quote Fetcher
     static func getDailyQuote() async -> String {
         let defaults = UserDefaults.standard
-        
-        // 1. Check if we already have a quote saved for TODAY
         if let savedDate = defaults.object(forKey: dateKey) as? Date,
            Calendar.current.isDateInToday(savedDate),
            let savedQuote = defaults.string(forKey: quoteKey) {
             return savedQuote
         }
-        
-        // 2. If not (or if it's a new day), fetch a fresh one
         let newQuote = await fetchFromAPI()
-        
-        // 3. Save it for the rest of the day
         defaults.set(newQuote, forKey: quoteKey)
         defaults.set(Date(), forKey: dateKey)
-        
         return newQuote
     }
     
-    // Private helper to handle the actual networking
     private static func fetchFromAPI() async -> String {
         guard let url = URL(string: "https://api.quotable.io/random?tags=wisdom") else {
             return backupQuotes.randomElement()!
         }
-        
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             let quoteData = try JSONDecoder().decode(APIQuote.self, from: data)
             return "\"\(quoteData.content)\" — \(quoteData.author)"
         } catch {
-            // If offline, pick a random backup
             return backupQuotes.randomElement()!
         }
     }
@@ -138,7 +179,6 @@ struct LiquidBackground: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            
             // Blob 1: Deep Purple
             Circle()
                 .fill(Color.purple.opacity(0.4))
@@ -146,7 +186,6 @@ struct LiquidBackground: View {
                 .blur(radius: 60)
                 .offset(x: moveBlobs ? -100 : 100, y: moveBlobs ? -150 : 150)
                 .animation(.easeInOut(duration: 10).repeatForever(autoreverses: true), value: moveBlobs)
-            
             // Blob 2: Teal/Blue
             Circle()
                 .fill(Color.blue.opacity(0.4))
@@ -154,7 +193,6 @@ struct LiquidBackground: View {
                 .blur(radius: 70)
                 .offset(x: moveBlobs ? 120 : -120, y: moveBlobs ? 200 : -200)
                 .animation(.easeInOut(duration: 12).repeatForever(autoreverses: true), value: moveBlobs)
-            
             // Blob 3: Accent Pink
             Circle()
                 .fill(Color.pink.opacity(0.2))
@@ -170,15 +208,187 @@ struct LiquidBackground: View {
     }
 }
 
-// MARK: - MAIN CONTENT VIEW
+// MARK: - ROOT VIEW (ORCHESTRATOR)
 struct ContentView: View {
+    @AppStorage("hasCompletedOnboarding") var hasCompletedOnboarding: Bool = false
+    @AppStorage("isAppLocked") var isAppLocked: Bool = false
+    @AppStorage("isFaceIDEnabled") var isFaceIDEnabled: Bool = false
+    
+    var body: some View {
+        ZStack {
+            if !hasCompletedOnboarding {
+                OnboardingView()
+            } else if isAppLocked && isFaceIDEnabled {
+                LockView()
+            } else {
+                JournalHomeView()
+            }
+        }
+        .animation(.easeInOut, value: hasCompletedOnboarding)
+        .animation(.easeInOut, value: isAppLocked)
+    }
+}
+
+// MARK: - ONBOARDING FLOW
+struct OnboardingView: View {
+    @AppStorage("hasCompletedOnboarding") var hasCompletedOnboarding: Bool = false
+    @AppStorage("userName") var userName: String = ""
+    @State private var currentTab = 0
+    
+    var body: some View {
+        ZStack {
+            LiquidBackground()
+            
+            TabView(selection: $currentTab) {
+                // Step 1: Welcome
+                VStack(spacing: 20) {
+                    Text("Now.")
+                        .font(.system(size: 60, weight: .bold, design: .serif))
+                    Text("Your space for clarity,\npresence, and peace.")
+                        .multilineTextAlignment(.center)
+                        .font(.title3)
+                        .opacity(0.8)
+                }
+                .tag(0)
+                
+                // Step 2: Name
+                VStack(spacing: 30) {
+                    Text("What should we call you?")
+                        .font(.title)
+                        .fontWeight(.semibold)
+                    
+                    TextField("Your Name", text: $userName)
+                        .padding()
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(12)
+                        .padding(.horizontal, 40)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.white)
+                        .tint(.white)
+                }
+                .tag(1)
+                
+                // Step 3: Notifications
+                VStack(spacing: 30) {
+                    Image(systemName: "bell.badge")
+                        .font(.system(size: 60))
+                        .opacity(0.8)
+                    
+                    Text("Consistency is key.")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                    
+                    Text("Allow us to gently nudge you to\nreturn to the present moment.")
+                        .multilineTextAlignment(.center)
+                        .opacity(0.7)
+                        .padding(.horizontal)
+                    
+                    Button("Enable Reminders") {
+                        NotificationManager.requestPermission { granted in
+                            if granted {
+                                NotificationManager.scheduleDailyReminder(isEnabled: true)
+                                UserDefaults.standard.set(true, forKey: "areNotificationsEnabled")
+                            }
+                        }
+                    }
+                    .padding()
+                    .background(Color.white)
+                    .foregroundColor(.black)
+                    .cornerRadius(25)
+                }
+                .tag(2)
+                
+                // Step 4: Finish
+                VStack(spacing: 30) {
+                    Text("You are ready.")
+                        .font(.title)
+                        .fontWeight(.bold)
+                    
+                    Button(action: {
+                        withAnimation {
+                            if userName.isEmpty { userName = "Traveler" }
+                            hasCompletedOnboarding = true
+                        }
+                    }) {
+                        Text("Begin Journey")
+                            .font(.headline)
+                            .foregroundColor(.black)
+                            .padding(.horizontal, 40)
+                            .padding(.vertical, 16)
+                            .background(Color.white)
+                            .cornerRadius(30)
+                    }
+                }
+                .tag(3)
+            }
+            .tabViewStyle(.page(indexDisplayMode: .always))
+            .foregroundColor(.white)
+        }
+    }
+}
+
+// MARK: - LOCK SCREEN (FACE ID)
+struct LockView: View {
+    @AppStorage("isAppLocked") var isAppLocked: Bool = false
+    @State private var shake = false
+    
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            LiquidBackground()
+                .blur(radius: 20) // Heavier blur for privacy
+            
+            VStack(spacing: 20) {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 50))
+                    .foregroundColor(.white.opacity(0.7))
+                
+                Text("Now. is Locked")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                
+                Button("Unlock") {
+                    unlockApp()
+                }
+                .padding(.top, 20)
+                .font(.headline)
+                .foregroundColor(.white)
+                .padding(.horizontal, 30)
+                .padding(.vertical, 12)
+                .background(.ultraThinMaterial)
+                .cornerRadius(20)
+            }
+            .offset(x: shake ? 10 : 0)
+            .animation(.default.repeatCount(3).speed(4), value: shake)
+        }
+        .onAppear {
+            unlockApp()
+        }
+    }
+    
+    func unlockApp() {
+        AuthenticationManager.authenticate { success in
+            if success {
+                withAnimation {
+                    isAppLocked = false
+                }
+            } else {
+                // Haptic feedback or shake animation could go here
+                shake.toggle()
+            }
+        }
+    }
+}
+
+// MARK: - MAIN APP CONTENT (HOME)
+struct JournalHomeView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \JournalEntry.timestamp, order: .reverse) private var entries: [JournalEntry]
+    @AppStorage("userName") var userName: String = "Traveler"
     
     @State private var showNewEntrySheet = false
-    @State private var showProfileSheet = false // New state for profile
-    
-    // State for the dynamic quote
+    @State private var showProfileSheet = false
     @State private var dailyQuote: String = "Finding wisdom..."
     
     var body: some View {
@@ -188,18 +398,15 @@ struct ContentView: View {
                 
                 ScrollView {
                     VStack(spacing: 24) {
-                        // Header with Profile Action
-                        HeaderView(onProfileTap: {
+                        HeaderView(userName: userName, onProfileTap: {
                             showProfileSheet = true
                         })
                         
-                        // Quote now navigates to "Breathing Space"
                         NavigationLink(destination: BreathingSpaceView(quote: dailyQuote)) {
                             QuoteCard(quote: dailyQuote)
                         }
-                        .buttonStyle(PlainButtonStyle()) // Prevents default link coloring
+                        .buttonStyle(PlainButtonStyle())
                         
-                        // New Entry Button
                         Button(action: { showNewEntrySheet = true }) {
                             HStack {
                                 Image(systemName: "plus")
@@ -228,7 +435,6 @@ struct ContentView: View {
                                         EntryRow(entry: entry)
                                     }
                                     .buttonStyle(PlainButtonStyle())
-                                    // Enable deletion via Long Press context menu
                                     .contextMenu {
                                         Button(role: .destructive) {
                                             deleteEntry(entry)
@@ -254,7 +460,6 @@ struct ContentView: View {
                 ProfileView()
                     .presentationBackground(.ultraThinMaterial)
             }
-            // Load the quote (cached or new) when the app appears
             .task {
                 dailyQuote = await AppContent.getDailyQuote()
             }
@@ -268,24 +473,22 @@ struct ContentView: View {
     }
 }
 
-// MARK: - NEW VIEWS (PROFILE, DETAILS & FEATURES)
-
-/// The Profile View showing stats and settings
+// MARK: - PROFILE VIEW (FUNCTIONAL)
 struct ProfileView: View {
     @Query private var entries: [JournalEntry]
     @Environment(\.dismiss) private var dismiss
+    
+    @AppStorage("userName") var userName: String = "Traveler"
+    @AppStorage("areNotificationsEnabled") var areNotificationsEnabled: Bool = false
+    @AppStorage("isFaceIDEnabled") var isFaceIDEnabled: Bool = false
 
-    // Computed stats
     var totalEntries: Int { entries.count }
-    var currentStreak: Int {
-        return entries.isEmpty ? 0 : 1 // Simplified streak for V1
-    }
+    var currentStreak: Int { return entries.isEmpty ? 0 : 1 } // Simplified
     
     var averageMood: String {
         if entries.isEmpty { return "N/A" }
         let total = entries.reduce(0) { $0 + $1.moodScore }
         let average = total / Double(entries.count)
-        
         switch average {
         case 0..<0.2: return "Heavy"
         case 0.2..<0.4: return "Anxious"
@@ -302,15 +505,12 @@ struct ProfileView: View {
 
             ScrollView {
                 VStack(spacing: 24) {
-                    // Custom Header for Sheet
                     HStack {
                         Text("Profile")
                             .font(.system(size: 40, weight: .bold, design: .serif))
                             .foregroundColor(.white)
                         Spacer()
-                        Button {
-                            dismiss()
-                        } label: {
+                        Button { dismiss() } label: {
                             Image(systemName: "xmark.circle.fill")
                                 .font(.title2)
                                 .foregroundColor(.white.opacity(0.5))
@@ -319,31 +519,29 @@ struct ProfileView: View {
                     .padding(.horizontal)
                     .padding(.top, 24)
 
-                    // Avatar / Identity
                     VStack(spacing: 12) {
                         Circle()
                             .fill(.ultraThinMaterial)
                             .frame(width: 100, height: 100)
                             .overlay(
-                                Text("ME")
-                                    .font(.system(size: 30, weight: .bold, design: .serif))
+                                Text(userName.prefix(1).uppercased())
+                                    .font(.system(size: 40, weight: .bold, design: .serif))
                                     .foregroundColor(.white)
                             )
                             .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 1))
                             .shadow(radius: 10)
 
-                        Text("Mindful Traveler")
+                        Text(userName)
                             .font(.title3)
                             .fontWeight(.medium)
                             .foregroundColor(.white)
                         
-                        Text("Member since today")
+                        Text("Mindful Member")
                             .font(.caption)
                             .foregroundColor(.white.opacity(0.5))
                     }
                     .padding(.vertical)
 
-                    // Stats Grid
                     HStack(spacing: 12) {
                         StatCard(title: "Entries", value: "\(totalEntries)")
                         StatCard(title: "Day Streak", value: "\(currentStreak)")
@@ -351,7 +549,6 @@ struct ProfileView: View {
                     }
                     .padding(.horizontal)
 
-                    // Settings Section
                     VStack(alignment: .leading, spacing: 16) {
                         Text("PREFERENCES")
                             .font(.caption)
@@ -360,11 +557,50 @@ struct ProfileView: View {
                             .padding(.leading, 8)
                             .padding(.top, 10)
 
-                        SettingsRow(icon: "bell.fill", title: "Daily Reminders", isOn: true)
-                        SettingsRow(icon: "faceid", title: "Face ID Lock", isOn: false)
-                        SettingsRow(icon: "icloud.fill", title: "iCloud Sync", isOn: true)
+                        // Functional Notification Toggle
+                        Toggle(isOn: $areNotificationsEnabled) {
+                            HStack {
+                                Image(systemName: "bell.fill").frame(width: 24)
+                                Text("Daily Reminders (8 PM)")
+                            }
+                        }
+                        .padding()
+                        .liquidGlass()
+                        .foregroundColor(.white)
+                        .onChange(of: areNotificationsEnabled) { oldValue, newValue in
+                            if newValue {
+                                NotificationManager.requestPermission { granted in
+                                    if granted {
+                                        NotificationManager.scheduleDailyReminder(isEnabled: true)
+                                    } else {
+                                        areNotificationsEnabled = false // Revert if denied
+                                    }
+                                }
+                            } else {
+                                NotificationManager.scheduleDailyReminder(isEnabled: false)
+                            }
+                        }
+
+                        // Functional FaceID Toggle
+                        Toggle(isOn: $isFaceIDEnabled) {
+                            HStack {
+                                Image(systemName: "faceid").frame(width: 24)
+                                Text("Face ID Lock")
+                            }
+                        }
+                        .padding()
+                        .liquidGlass()
+                        .foregroundColor(.white)
+                        .onChange(of: isFaceIDEnabled) { oldValue, newValue in
+                            if newValue {
+                                // Authenticate before enabling to ensure it works
+                                AuthenticationManager.authenticate { success in
+                                    if !success { isFaceIDEnabled = false }
+                                }
+                            }
+                        }
                         
-                        // Data Export Button
+                        // Export (Placeholder)
                         Button(action: {}) {
                             HStack {
                                 Image(systemName: "square.and.arrow.up")
@@ -388,6 +624,8 @@ struct ProfileView: View {
     }
 }
 
+// MARK: - HELPERS & REUSED VIEWS
+
 struct StatCard: View {
     let title: String
     let value: String
@@ -409,152 +647,8 @@ struct StatCard: View {
     }
 }
 
-struct SettingsRow: View {
-    let icon: String
-    let title: String
-    @State var isOn: Bool
-
-    var body: some View {
-        HStack {
-            Image(systemName: icon)
-                .foregroundColor(.white.opacity(0.8))
-                .frame(width: 24)
-            Text(title)
-                .foregroundColor(.white)
-            Spacer()
-            Toggle("", isOn: $isOn)
-                .tint(.white.opacity(0.3))
-        }
-        .padding()
-        .liquidGlass()
-    }
-}
-
-/// A detail view to read the full entry and reflect
-struct EntryDetailView: View {
-    let entry: JournalEntry
-    @Environment(\.modelContext) private var modelContext
-    @Environment(\.dismiss) private var dismiss
-    
-    var body: some View {
-        ZStack {
-            LiquidBackground() // Consistent background
-            
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    // Meta Header
-                    HStack {
-                        Text(entry.timestamp.formatted(date: .complete, time: .shortened))
-                            .font(.subheadline)
-                            .foregroundColor(.white.opacity(0.6))
-                        Spacer()
-                        Text(entry.moodLabel.uppercased())
-                            .font(.caption)
-                            .fontWeight(.bold)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(.ultraThinMaterial)
-                            .cornerRadius(12)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                            )
-                    }
-                    
-                    Divider().background(.white.opacity(0.2))
-                    
-                    // Prompt
-                    Text(entry.prompt)
-                        .font(.title3)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
-                        .lineSpacing(4)
-                    
-                    // Content
-                    Text(entry.content)
-                        .font(.body)
-                        .foregroundColor(.white.opacity(0.9))
-                        .lineSpacing(8)
-                        .padding(.vertical)
-                    
-                    Spacer(minLength: 40)
-                    
-                    // Delete Button
-                    Button(role: .destructive, action: {
-                        modelContext.delete(entry)
-                        dismiss()
-                    }) {
-                        HStack {
-                            Image(systemName: "trash")
-                            Text("Delete Entry")
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.red.opacity(0.15))
-                        .foregroundColor(.red)
-                        .cornerRadius(16)
-                    }
-                }
-                .padding(24)
-                .liquidGlass() // Wrap the whole content in a glass card
-                .padding()
-            }
-        }
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(.hidden, for: .navigationBar)
-    }
-}
-
-/// A view focused on the quote with a breathing animation
-struct BreathingSpaceView: View {
-    @State private var breathe = false
-    let quote: String // Passed from parent
-    
-    var body: some View {
-        ZStack {
-            LiquidBackground()
-            
-            // Breathing Circle
-            Circle()
-                .fill(Color.white.opacity(0.05))
-                .frame(width: breathe ? 300 : 150, height: breathe ? 300 : 150)
-                .animation(.easeInOut(duration: 4).repeatForever(autoreverses: true), value: breathe)
-                .overlay(
-                    Circle()
-                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                        .scaleEffect(breathe ? 1.2 : 0.8)
-                        .opacity(breathe ? 0 : 1)
-                        .animation(.easeInOut(duration: 4).repeatForever(autoreverses: true), value: breathe)
-                )
-            
-            VStack(spacing: 30) {
-                Image(systemName: "wind")
-                    .font(.largeTitle)
-                    .foregroundColor(.white.opacity(0.5))
-                
-                Text(quote)
-                    .font(.system(size: 24, weight: .medium, design: .serif))
-                    .italic()
-                    .multilineTextAlignment(.center)
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 40)
-                    .shadow(color: .black.opacity(0.5), radius: 10)
-                
-                Text("Breathe in... Breathe out...")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.5))
-                    .padding(.top, 20)
-            }
-        }
-        .onAppear {
-            breathe = true
-        }
-    }
-}
-
-// MARK: - EXISTING SUBVIEWS
-
 struct HeaderView: View {
+    var userName: String
     var onProfileTap: () -> Void
     
     var body: some View {
@@ -577,7 +671,7 @@ struct HeaderView: View {
                     .fill(.ultraThinMaterial)
                     .frame(width: 44, height: 44)
                     .overlay(
-                        Text("ME")
+                        Text(userName.prefix(1).uppercased()) // Initials
                             .font(.caption2)
                             .bold()
                             .foregroundColor(.white)
@@ -589,6 +683,8 @@ struct HeaderView: View {
         .padding(.top, 20)
     }
 }
+
+// --- (All other subviews like QuoteCard, EntryRow, EntryDetailView, BreathingSpaceView remain unchanged below) ---
 
 struct QuoteCard: View {
     let quote: String
@@ -616,7 +712,6 @@ struct QuoteCard: View {
                     .foregroundColor(.white.opacity(0.6))
                 Spacer()
                 
-                // Indicator that this is tappable
                 HStack(spacing: 4) {
                     Text("Breathe")
                         .font(.caption2)
@@ -853,8 +948,117 @@ struct JournalingStep: View {
     }
 }
 
-#Preview {
-    ContentView()
-        .modelContainer(for: JournalEntry.self, inMemory: true)
-        .preferredColorScheme(.dark)
+struct EntryDetailView: View {
+    let entry: JournalEntry
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        ZStack {
+            LiquidBackground()
+            
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    HStack {
+                        Text(entry.timestamp.formatted(date: .complete, time: .shortened))
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.6))
+                        Spacer()
+                        Text(entry.moodLabel.uppercased())
+                            .font(.caption)
+                            .fontWeight(.bold)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(.ultraThinMaterial)
+                            .cornerRadius(12)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                            )
+                    }
+                    
+                    Divider().background(.white.opacity(0.2))
+                    
+                    Text(entry.prompt)
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .lineSpacing(4)
+                    
+                    Text(entry.content)
+                        .font(.body)
+                        .foregroundColor(.white.opacity(0.9))
+                        .lineSpacing(8)
+                        .padding(.vertical)
+                    
+                    Spacer(minLength: 40)
+                    
+                    Button(role: .destructive, action: {
+                        modelContext.delete(entry)
+                        dismiss()
+                    }) {
+                        HStack {
+                            Image(systemName: "trash")
+                            Text("Delete Entry")
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.red.opacity(0.15))
+                        .foregroundColor(.red)
+                        .cornerRadius(16)
+                    }
+                }
+                .padding(24)
+                .liquidGlass()
+                .padding()
+            }
+        }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.hidden, for: .navigationBar)
+    }
+}
+
+struct BreathingSpaceView: View {
+    @State private var breathe = false
+    let quote: String
+    
+    var body: some View {
+        ZStack {
+            LiquidBackground()
+            
+            Circle()
+                .fill(Color.white.opacity(0.05))
+                .frame(width: breathe ? 300 : 150, height: breathe ? 300 : 150)
+                .animation(.easeInOut(duration: 4).repeatForever(autoreverses: true), value: breathe)
+                .overlay(
+                    Circle()
+                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                        .scaleEffect(breathe ? 1.2 : 0.8)
+                        .opacity(breathe ? 0 : 1)
+                        .animation(.easeInOut(duration: 4).repeatForever(autoreverses: true), value: breathe)
+                )
+            
+            VStack(spacing: 30) {
+                Image(systemName: "wind")
+                    .font(.largeTitle)
+                    .foregroundColor(.white.opacity(0.5))
+                
+                Text(quote)
+                    .font(.system(size: 24, weight: .medium, design: .serif))
+                    .italic()
+                    .multilineTextAlignment(.center)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 40)
+                    .shadow(color: .black.opacity(0.5), radius: 10)
+                
+                Text("Breathe in... Breathe out...")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.5))
+                    .padding(.top, 20)
+            }
+        }
+        .onAppear {
+            breathe = true
+        }
+    }
 }
