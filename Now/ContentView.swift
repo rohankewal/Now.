@@ -67,11 +67,35 @@ struct AppContent {
         "The present moment is filled with joy and happiness. — Thich Nhat Hanh"
     ]
     
+    // Keys for saving the daily quote to UserDefaults
+    private static let quoteKey = "storedDailyQuote"
+    private static let dateKey = "storedDailyQuoteDate"
+    
     static func randomPrompt() -> String { prompts.randomElement()! }
     
-    // NEW: Async Fetch Function
-    static func fetchQuote() async -> String {
-        // We use a specific tag 'wisdom' to keep it relevant to the app's theme
+    // NEW: Smart Daily Quote Fetcher
+    static func getDailyQuote() async -> String {
+        let defaults = UserDefaults.standard
+        
+        // 1. Check if we already have a quote saved for TODAY
+        if let savedDate = defaults.object(forKey: dateKey) as? Date,
+           Calendar.current.isDateInToday(savedDate),
+           let savedQuote = defaults.string(forKey: quoteKey) {
+            return savedQuote
+        }
+        
+        // 2. If not (or if it's a new day), fetch a fresh one
+        let newQuote = await fetchFromAPI()
+        
+        // 3. Save it for the rest of the day
+        defaults.set(newQuote, forKey: quoteKey)
+        defaults.set(Date(), forKey: dateKey)
+        
+        return newQuote
+    }
+    
+    // Private helper to handle the actual networking
+    private static func fetchFromAPI() async -> String {
         guard let url = URL(string: "https://api.quotable.io/random?tags=wisdom") else {
             return backupQuotes.randomElement()!
         }
@@ -81,7 +105,7 @@ struct AppContent {
             let quoteData = try JSONDecoder().decode(APIQuote.self, from: data)
             return "\"\(quoteData.content)\" — \(quoteData.author)"
         } catch {
-            // If fetch fails (offline/error), return a backup
+            // If offline, pick a random backup
             return backupQuotes.randomElement()!
         }
     }
@@ -221,9 +245,9 @@ struct ContentView: View {
                 NewEntryView()
                     .presentationBackground(.ultraThinMaterial)
             }
-            // Load the quote when the app appears
+            // Load the quote (cached or new) when the app appears
             .task {
-                dailyQuote = await AppContent.fetchQuote()
+                dailyQuote = await AppContent.getDailyQuote()
             }
         }
     }
