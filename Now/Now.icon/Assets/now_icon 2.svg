@@ -1,0 +1,15 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- Concept: "The Held Moment" -->
+    <!-- Breaking the "Camera" look by using open brackets instead of a closed ring. -->
+    
+    <!-- Center Dot: Represents "The Now" -->
+    <!-- Solid White for focus -->
+    <circle cx="512" cy="512" r="150" fill="white" />
+    
+    <!-- Left Arc: Represents "Holding Space" or "Inhale" -->
+    <!-- Opacity 60% for Glass Effect -->
+    <path d="M 320 280 Q 120 512 320 744" stroke="white" stroke-width="80" stroke-opacity="0.6" stroke-linecap="round" />
+    
+    <!-- Right Arc: Represents "Focus" or "Exhale" -->
+    <path d="M 704 280 Q 904 512 704 744" stroke="white" stroke-width="80" stroke-opacity="0.6" stroke-linecap="round" />
+</svg>
