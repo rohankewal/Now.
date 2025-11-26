@@ -172,7 +172,7 @@ struct BreathingSpaceView: View {
     
     func runCoherenceLoop() {
         // 5s In, 5s Out
-        let cycle = 10.0
+        let _cycle = 10.0
         
         // Initial State
         withAnimation(.easeInOut(duration: 5)) { scale = 1.5 }

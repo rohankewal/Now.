@@ -36,5 +36,5 @@ struct ContentView: View {
         // Smooth transitions between these major states
         .animation(.easeInOut, value: hasCompletedOnboarding)
         .animation(.easeInOut, value: isAppLocked)
-    } 
+    }
 }
